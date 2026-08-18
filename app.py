@@ -37,15 +37,29 @@ PART_GAMMA: str = "29"
 
 
 def verify_access_code() -> bool:
-    """Yêu cầu nhập access code và kiểm tra trước khi cho phép truy cập."""
+    """Yêu cầu nhập access code và kiểm tra trước khi cho phép truy cập.
+    Hỗ trợ fallback sang input() nếu getpass không hoạt động trên Windows CMD / exec().
+    """
     reconstructed_code: str = f"{PART_ALPHA}{PART_BETA}{PART_GAMMA}"
+    entered_code: str = ""
+
+    prompt_text = "Enter access code: "
+
     try:
-        entered_code: str = getpass.getpass("Enter access code: ")
-    except Exception as err:
-        logging.error("Failed to read input: %s", err)
+        # Thử sử dụng getpass trước để ẩn ký tự nhập
+        entered_code = getpass.getpass(prompt_text)
+    except (getpass.GetPassWarning, OSError, Exception):
+        # Fallback sang input() nếu môi trường terminal/exec không hỗ trợ getpass
+        try:
+            entered_code = input(prompt_text)
+        except (EOFError, KeyboardInterrupt):
+            print("\n[-] Authentication cancelled.")
+            return False
+    except (EOFError, KeyboardInterrupt):
+        print("\n[-] Authentication cancelled.")
         return False
 
-    if entered_code == reconstructed_code:
+    if entered_code.strip() == reconstructed_code:
         print("[+] Access Granted.\n")
         return True
     else:
@@ -71,12 +85,16 @@ def check_python_version() -> None:
 def ask_yes_no(prompt_text: str) -> bool:
     """Hỏi phản hồi Yes/No từ người dùng (chấp nhận Y, Yes, N, No không phân biệt hoa thường)."""
     while True:
-        response = input(prompt_text).strip().lower()
-        if response in ["y", "yes"]:
-            return True
-        elif response in ["n", "no"]:
-            return False
-        print("Invalid input. Please enter 'Y' or 'N'.")
+        try:
+            response = input(prompt_text).strip().lower()
+            if response in ["y", "yes"]:
+                return True
+            elif response in ["n", "no"]:
+                return False
+            print("Invalid input. Please enter 'Y' or 'N'.")
+        except (EOFError, KeyboardInterrupt):
+            print("\n[-] Operation cancelled.")
+            sys.exit(0)
 
 
 def check_and_install_python_packages() -> None:
@@ -148,14 +166,17 @@ def handle_external_tool_installation(tool_name: str) -> None:
 def get_validated_ip() -> Union[ipaddress.IPv4Address, ipaddress.IPv6Address]:
     """Yêu cầu và xác thực địa chỉ IP (IPv4 / IPv6). Tuân thủ không nhận Hostname/URL."""
     while True:
-        raw_ip = input("Enter IP address to monitor: ").strip()
         try:
+            raw_ip = input("Enter IP address to monitor: ").strip()
             ip_obj = ipaddress.ip_address(raw_ip)
             print(f"[+] Target IP validated: {ip_obj} (Version: IPv{ip_obj.version})")
             check_host_reachability(str(ip_obj))
             return ip_obj
         except ValueError:
             print("[-] Invalid input. Hostnames, domain names, and URLs are NOT allowed. Enter a valid IPv4 or IPv6 address.")
+        except (EOFError, KeyboardInterrupt):
+            print("\n[-] Operation cancelled. Exiting.")
+            sys.exit(0)
 
 
 def check_host_reachability(ip_str: str) -> None:
@@ -400,7 +421,7 @@ HTML_TEMPLATE = """
 def start_flask_dashboard(monitor: NetworkMonitor, target_ip: str, geo_info: Dict[str, str]) -> None:
     """Khởi chạy web server Flask hiển thị Dashboard trên localhost."""
     try:
-        from flask import Flask, jsonify, render_template_string
+        from flask import Flask, jsonify, render_template_string, request
     except ImportError:
         print("[-] Flask package is missing. Cannot start web dashboard.")
         return
@@ -465,7 +486,6 @@ def main() -> None:
         if ask_yes_no("\nWould you like to run a basic port check on target using Nmap? [Y/N]: "):
             print(f"[*] Executing target-restricted Nmap scan on {target_ip_str}...")
             try:
-                # Chỉ thực hiện quét cơ bản (-F: fast scan), không tấn công credential/exploit/evasion
                 res = subprocess.run(["nmap", "-sV", "-F", target_ip_str], capture_output=True, text=True, timeout=30)
                 print(res.stdout)
             except Exception as e:
