@@ -32,25 +32,53 @@ PART_GAMMA: str = "29"
 def verify_access_code() -> bool:
     """Yêu cầu nhập access code và kiểm tra trước khi cho phép truy cập."""
     reconstructed_code: str = f"{PART_ALPHA}{PART_BETA}{PART_GAMMA}"
-    
-    # Dọn sạch bộ đệm stdout/stdin để đảm bảo Windows Console nhận phím bấm chính xác
-    try:
-        sys.stdout.flush()
-        if platform.system() == "Windows":
-            import msvcrt
-            while msvcrt.kbhit():
-                msvcrt.getch()
-    except Exception:
-        pass
 
-    try:
-        entered_code: str = getpass.getpass("Security code: ")
-    except (KeyboardInterrupt, EOFError):
-        print("\n[-] Authentication cancelled.")
-        return False
-    except Exception as err:
-        print(f"\n[-] Authentication error: {err}")
-        return False
+    if platform.system() == "Windows":
+        try:
+            import msvcrt
+            print("Security code: ", end="", flush=True)
+            chars = []
+            while True:
+                key = msvcrt.getwch()
+
+                if key in ("\r", "\n"):
+                    print()
+                    break
+
+                if key == "\003":  # Ctrl+C
+                    print("\n[-] Authentication cancelled.")
+                    return False
+
+                if key == "\b":  # Backspace
+                    if chars:
+                        chars.pop()
+                        print("\b \b", end="", flush=True)
+                    continue
+
+                if key in ("\x00", "\xe0"):  # Special / Function keys
+                    msvcrt.getwch()
+                    continue
+
+                if key.isprintable():
+                    chars.append(key)
+                    print("*", end="", flush=True)
+
+            entered_code = "".join(chars)
+        except (KeyboardInterrupt, EOFError):
+            print("\n[-] Authentication cancelled.")
+            return False
+        except Exception as err:
+            print(f"\n[-] Authentication error: {err}")
+            return False
+    else:
+        try:
+            entered_code = getpass.getpass("Security code: ")
+        except (KeyboardInterrupt, EOFError):
+            print("\n[-] Authentication cancelled.")
+            return False
+        except Exception as err:
+            print(f"\n[-] Authentication error: {err}")
+            return False
 
     if entered_code == reconstructed_code:
         print("[+] Access Granted.\n")
@@ -469,7 +497,7 @@ def start_flask_dashboard(monitor: NetworkMonitor, target_ip: str, geo_info: Dic
 # ---------------------------------------------------------------------------
 def main() -> None:
     print("==================================================")
-    print("      Internal Network Monitoring System         ")
+    print("     Internal Network Monitoring System          ")
     print("==================================================\n")
 
     # 1. BẢO MẬT: Yêu cầu xác thực ngay đầu tiên trước mọi thao tác khác
