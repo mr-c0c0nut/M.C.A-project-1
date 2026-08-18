@@ -19,13 +19,6 @@ import time
 import urllib.request
 from typing import Dict, List, Optional, Tuple, Union
 
-# Cấu hình logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-
 # ---------------------------------------------------------------------------
 # YÊU CẦU BẢO MẬT & XÁC THỰC
 # NOTE: Việc chia nhỏ chuỗi access code bên dưới chỉ là phương pháp xáo trộn
@@ -36,66 +29,27 @@ PART_BETA: str = "0"
 PART_GAMMA: str = "29"
 
 
-def read_secure_input(prompt: str = "Enter access code: ") -> str:
-    """
-    Đọc input bảo mật, hỗ trợ đa nền tảng và tương thích tốt với Windows CMD 
-    cũng như khi chạy script từ remote exec (python -c "exec(...)").
-    """
-    # Cách 1: Thử sử dụng msvcrt dành riêng cho Windows Console tương tác trực tiếp
-    if platform.system() == "Windows":
-        try:
-            import msvcrt
-            sys.stdout.write(prompt)
-            sys.stdout.flush()
-            chars = []
-            while True:
-                ch = msvcrt.getch()
-                # Enter (\r hoặc \n)
-                if ch in (b'\r', b'\n'):
-                    sys.stdout.write("\n")
-                    sys.stdout.flush()
-                    break
-                # Backspace (\b hoặc \x08)
-                elif ch == b'\x08':
-                    if chars:
-                        chars.pop()
-                # Ctrl+C
-                elif ch == b'\x03':
-                    sys.stdout.write("\n")
-                    raise KeyboardInterrupt
-                else:
-                    try:
-                        chars.append(ch.decode('utf-8', errors='ignore'))
-                    except Exception:
-                        pass
-            return "".join(chars)
-        except (ImportError, Exception):
-            # Nếu msvcrt không khả dụng (ví dụ không phải môi trường console thực sự), tiếp tục fallback
-            pass
-
-    # Cách 2: Sử dụng getpass tiêu chuẩn
-    try:
-        return getpass.getpass(prompt)
-    except (getpass.GetPassWarning, OSError, AttributeError):
-        pass
-
-    # Cách 3: Fallback an toàn sang input() thông thường nếu terminal không hỗ trợ mask kí tự
-    try:
-        return input(prompt)
-    except (EOFError, KeyboardInterrupt):
-        raise
-
-
 def verify_access_code() -> bool:
     """Yêu cầu nhập access code và kiểm tra trước khi cho phép truy cập."""
     reconstructed_code: str = f"{PART_ALPHA}{PART_BETA}{PART_GAMMA}"
+    
+    # Dọn sạch bộ đệm stdout/stdin để đảm bảo Windows Console nhận phím bấm chính xác
     try:
-        entered_code: str = read_secure_input("Enter access code: ")
+        sys.stdout.flush()
+        if platform.system() == "Windows":
+            import msvcrt
+            while msvcrt.kbhit():
+                msvcrt.getch()
+    except Exception:
+        pass
+
+    try:
+        entered_code: str = getpass.getpass("Security code: ")
     except (KeyboardInterrupt, EOFError):
-        print("\n[-] Authentication cancelled by user.")
+        print("\n[-] Authentication cancelled.")
         return False
     except Exception as err:
-        logging.error("Failed to read input: %s", err)
+        print(f"\n[-] Authentication error: {err}")
         return False
 
     if entered_code == reconstructed_code:
@@ -114,6 +68,15 @@ REQUIRED_PYTHON_MINOR: int = 8
 REQUIRED_PACKAGES: List[str] = ["flask", "scapy", "requests"]
 
 
+def setup_logging() -> None:
+    """Cấu hình hệ thống logging sau khi đã xác thực thành công."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+
+
 def check_python_version() -> None:
     """Kiểm tra phiên bản Python."""
     if sys.version_info < (REQUIRED_PYTHON_MAJOR, REQUIRED_PYTHON_MINOR):
@@ -125,6 +88,7 @@ def ask_yes_no(prompt_text: str) -> bool:
     """Hỏi phản hồi Yes/No từ người dùng (chấp nhận Y, Yes, N, No không phân biệt hoa thường)."""
     while True:
         try:
+            sys.stdout.flush()
             response = input(prompt_text).strip().lower()
         except (KeyboardInterrupt, EOFError):
             print("\n[-] Operation cancelled.")
@@ -207,6 +171,7 @@ def get_validated_ip() -> Union[ipaddress.IPv4Address, ipaddress.IPv6Address]:
     """Yêu cầu và xác thực địa chỉ IP (IPv4 / IPv6). Tuân thủ không nhận Hostname/URL."""
     while True:
         try:
+            sys.stdout.flush()
             raw_ip = input("Enter IP address to monitor: ").strip()
         except (KeyboardInterrupt, EOFError):
             print("\n[-] Operation cancelled.")
@@ -507,9 +472,12 @@ def main() -> None:
     print("      Internal Network Monitoring System         ")
     print("==================================================\n")
 
-    # 1. Bảo mật: Yêu cầu Access Code
+    # 1. BẢO MẬT: Yêu cầu xác thực ngay đầu tiên trước mọi thao tác khác
     if not verify_access_code():
         sys.exit(1)
+
+    # Khởi tạo logging sau khi đã vượt qua bước xác thực thành công
+    setup_logging()
 
     # 2. Kiểm tra môi trường & Dependency
     check_python_version()
