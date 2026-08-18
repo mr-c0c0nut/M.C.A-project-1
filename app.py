@@ -36,30 +36,69 @@ PART_BETA: str = "0"
 PART_GAMMA: str = "29"
 
 
-def verify_access_code() -> bool:
-    """Yêu cầu nhập access code và kiểm tra trước khi cho phép truy cập.
-    Hỗ trợ fallback sang input() nếu getpass không hoạt động trên Windows CMD / exec().
+def read_secure_input(prompt: str = "Enter access code: ") -> str:
     """
-    reconstructed_code: str = f"{PART_ALPHA}{PART_BETA}{PART_GAMMA}"
-    entered_code: str = ""
-
-    prompt_text = "Enter access code: "
-
-    try:
-        # Thử sử dụng getpass trước để ẩn ký tự nhập
-        entered_code = getpass.getpass(prompt_text)
-    except (getpass.GetPassWarning, OSError, Exception):
-        # Fallback sang input() nếu môi trường terminal/exec không hỗ trợ getpass
+    Đọc input bảo mật, hỗ trợ đa nền tảng và tương thích tốt với Windows CMD 
+    cũng như khi chạy script từ remote exec (python -c "exec(...)").
+    """
+    # Cách 1: Thử sử dụng msvcrt dành riêng cho Windows Console tương tác trực tiếp
+    if platform.system() == "Windows":
         try:
-            entered_code = input(prompt_text)
-        except (EOFError, KeyboardInterrupt):
-            print("\n[-] Authentication cancelled.")
-            return False
+            import msvcrt
+            sys.stdout.write(prompt)
+            sys.stdout.flush()
+            chars = []
+            while True:
+                ch = msvcrt.getch()
+                # Enter (\r hoặc \n)
+                if ch in (b'\r', b'\n'):
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+                    break
+                # Backspace (\b hoặc \x08)
+                elif ch == b'\x08':
+                    if chars:
+                        chars.pop()
+                # Ctrl+C
+                elif ch == b'\x03':
+                    sys.stdout.write("\n")
+                    raise KeyboardInterrupt
+                else:
+                    try:
+                        chars.append(ch.decode('utf-8', errors='ignore'))
+                    except Exception:
+                        pass
+            return "".join(chars)
+        except (ImportError, Exception):
+            # Nếu msvcrt không khả dụng (ví dụ không phải môi trường console thực sự), tiếp tục fallback
+            pass
+
+    # Cách 2: Sử dụng getpass tiêu chuẩn
+    try:
+        return getpass.getpass(prompt)
+    except (getpass.GetPassWarning, OSError, AttributeError):
+        pass
+
+    # Cách 3: Fallback an toàn sang input() thông thường nếu terminal không hỗ trợ mask kí tự
+    try:
+        return input(prompt)
     except (EOFError, KeyboardInterrupt):
-        print("\n[-] Authentication cancelled.")
+        raise
+
+
+def verify_access_code() -> bool:
+    """Yêu cầu nhập access code và kiểm tra trước khi cho phép truy cập."""
+    reconstructed_code: str = f"{PART_ALPHA}{PART_BETA}{PART_GAMMA}"
+    try:
+        entered_code: str = read_secure_input("Enter access code: ")
+    except (KeyboardInterrupt, EOFError):
+        print("\n[-] Authentication cancelled by user.")
+        return False
+    except Exception as err:
+        logging.error("Failed to read input: %s", err)
         return False
 
-    if entered_code.strip() == reconstructed_code:
+    if entered_code == reconstructed_code:
         print("[+] Access Granted.\n")
         return True
     else:
@@ -87,14 +126,15 @@ def ask_yes_no(prompt_text: str) -> bool:
     while True:
         try:
             response = input(prompt_text).strip().lower()
-            if response in ["y", "yes"]:
-                return True
-            elif response in ["n", "no"]:
-                return False
-            print("Invalid input. Please enter 'Y' or 'N'.")
-        except (EOFError, KeyboardInterrupt):
+        except (KeyboardInterrupt, EOFError):
             print("\n[-] Operation cancelled.")
             sys.exit(0)
+            
+        if response in ["y", "yes"]:
+            return True
+        elif response in ["n", "no"]:
+            return False
+        print("Invalid input. Please enter 'Y' or 'N'.")
 
 
 def check_and_install_python_packages() -> None:
@@ -168,15 +208,17 @@ def get_validated_ip() -> Union[ipaddress.IPv4Address, ipaddress.IPv6Address]:
     while True:
         try:
             raw_ip = input("Enter IP address to monitor: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\n[-] Operation cancelled.")
+            sys.exit(0)
+            
+        try:
             ip_obj = ipaddress.ip_address(raw_ip)
             print(f"[+] Target IP validated: {ip_obj} (Version: IPv{ip_obj.version})")
             check_host_reachability(str(ip_obj))
             return ip_obj
         except ValueError:
             print("[-] Invalid input. Hostnames, domain names, and URLs are NOT allowed. Enter a valid IPv4 or IPv6 address.")
-        except (EOFError, KeyboardInterrupt):
-            print("\n[-] Operation cancelled. Exiting.")
-            sys.exit(0)
 
 
 def check_host_reachability(ip_str: str) -> None:
@@ -486,6 +528,7 @@ def main() -> None:
         if ask_yes_no("\nWould you like to run a basic port check on target using Nmap? [Y/N]: "):
             print(f"[*] Executing target-restricted Nmap scan on {target_ip_str}...")
             try:
+                # Chỉ thực hiện quét cơ bản (-F: fast scan), không tấn công credential/exploit/evasion
                 res = subprocess.run(["nmap", "-sV", "-F", target_ip_str], capture_output=True, text=True, timeout=30)
                 print(res.stdout)
             except Exception as e:
